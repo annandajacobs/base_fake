@@ -74,7 +74,7 @@ for i, nome in enumerate(lista_disciplinas, start=1):
     })
 
 
-arquivo_excel = "bairros.xlsx"
+arquivo_excel = "recursos/bairros.xlsx"
 
 df = pd.read_excel(arquivo_excel)
 
@@ -149,10 +149,10 @@ def salvar_csv(nome_arquivo, dados):
         writer.writeheader()
         writer.writerows(dados)
 
-salvar_csv("cursos.csv", cursos)
-salvar_csv("disciplinas.csv", disciplinas)
-salvar_csv("estudantes.csv", estudantes)
-salvar_csv("matriculas_disciplina.csv", matriculas_disciplina)
-salvar_csv("registro_frequencia.csv", registro_frequencia)
+salvar_csv("dados/cursos.csv", cursos)
+salvar_csv("dados/disciplinas.csv", disciplinas)
+salvar_csv("dados/estudantes.csv", estudantes)
+salvar_csv("dados/matriculas_disciplina.csv", matriculas_disciplina)
+salvar_csv("dados/registro_frequencia.csv", registro_frequencia)
 
 print("CSV gerados com sucesso!")
