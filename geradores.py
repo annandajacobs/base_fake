@@ -27,12 +27,12 @@ def gerar_disciplinas():
 
 def gerar_estudantes(cursos, cidade_bairros):
     """
-    Gera estudantes com situação e perfil_risco definidos por cotas.
     Alunos fora de Maceió têm chance de ter perfil_risco elevado em um nível,
     simulando o impacto da distância como fator de risco de evasão.
 
-    Campos internos (não salvos no CSV de estudantes):
-        perfil_risco : "BAIXO" | "MEDIO" | "ALTO"  — só para ATIVO
+    Classifica o perfil de risco do aluno: Alto, médio e baixo
+
+    Considera apenas alunos ATIVOS
     """
 
     cidades = list(cidade_bairros.keys())
@@ -81,6 +81,15 @@ def gerar_matriculas(estudantes, disciplinas):
 
     for est in estudantes:
 
+        perfil = est["perfil_risco"]
+
+        if perfil == "ALTO":
+            lo, hi = NOTAS_RISCO_ALTO
+        elif perfil == "MEDIO":
+            lo, hi = NOTAS_RISCO_MEDIO
+        else:
+            lo, hi = NOTAS_RISCO_BAIXO
+
         disciplinas_escolhidas = random.sample(disciplinas, DISCIPLINAS_POR_ALUNO)
 
         for disc in disciplinas_escolhidas:
@@ -89,6 +98,7 @@ def gerar_matriculas(estudantes, disciplinas):
                 "id_estudante"           : est["id_estudante"],
                 "id_disciplina"          : disc["id_disciplina"],
                 "ano_letivo"             : ANO_LETIVO,
+                "media_geral"            : round(random.uniform(lo, hi), 1),
             })
             id_md += 1
 
@@ -100,11 +110,8 @@ def gerar_presenca_campus(estudantes):
     esteve presente no campus (PRESENTE | AUSENTE).
 
     Regras:
-      - Demais perfis: probabilidade de presença baseada no perfil_risco/situação.
-      - Este registro é a fonte de verdade: se AUSENTE no campus,
-        o aluno NUNCA poderá estar PRESENTE em sala naquele dia.
-
-        DESCONSIDERAR FINS DE SEMANA NA GERAÇÃO DE PRESENÇA NO CAMPUS !!!
+      - Demais perfis: probabilidade de presença baseada no perfil_risco.
+      - Se AUSENTE no campus, o aluno NUNCA poderá estar PRESENTE em sala naquele dia.
     """
 
     perfil_por_est  = {e["id_estudante"]: e["perfil_risco"] for e in estudantes}
@@ -146,14 +153,13 @@ def gerar_frequencia(matriculas, estudantes, presenca_campus):
     """
     Gera registros de presença/falta por aula e frequencia.
 
-    Regra de consistência:
+    Regras:
       - Se o aluno estava AUSENTE no campus naquele dia → FALTA obrigatória
         em todas as suas disciplinas naquele dia.
       - Se estava PRESENTE no campus → presença/falta definida pelo perfil_risco
         (o aluno pode ter chegado ao campus mas faltado a alguma aula).
-
-        DESCONSIDERAR FINS DE SEMANA NA GERAÇÃO DE PRESENÇA NO CAMPUS !!!
     """
+
     perfil_por_est = {e["id_estudante"]: e["perfil_risco"] for e in estudantes}
     est_por_mat    = {
         m["id_matricula_disciplina"]: m["id_estudante"] for m in matriculas
@@ -201,7 +207,7 @@ def gerar_frequencia(matriculas, estudantes, presenca_campus):
 
 def gerar_tabela_risco(estudantes, matriculas, frequencia):
     """
-    Consolida uma tabela por estudante pronta para ML.
+    Consolida uma tabela por estudante pronta para ser explorada.
       - features: freq_media, total_reprovacoes, total_disciplinas, cidade
       - label   : risco_evasao (ALTO | MEDIO | BAIXO)
 
@@ -213,7 +219,6 @@ def gerar_tabela_risco(estudantes, matriculas, frequencia):
     df_mat  = pd.DataFrame(matriculas)
     df_freq = pd.DataFrame(frequencia)
 
-    # Agrega frequência por matrícula
     df_resumo = df_freq.groupby("id_matricula_disciplina").agg(
         frequencia     = ("situacao", lambda x: (x == "PRESENTE").sum() / TOTAL_AULAS),
         situacao_final = ("situacao", lambda x:
@@ -222,23 +227,39 @@ def gerar_tabela_risco(estudantes, matriculas, frequencia):
     ).reset_index()
 
     df_merged = df_mat.merge(df_resumo, on="id_matricula_disciplina")
-    agg = df_merged.groupby("id_estudante").agg(
+
+    agg_freq = df_merged.groupby("id_estudante").agg(
         freq_media        = ("frequencia",    "mean"),
         total_reprovacoes = ("situacao_final", lambda x: (x == "REPROVADO").sum()),
         total_disciplinas = ("id_disciplina",  "count"),
     ).reset_index()
 
+    agg_nota = df_mat.groupby("id_estudante").agg(
+        media_geral = ("media_geral", "mean"),
+    ).reset_index()
+
+    agg = agg_freq.merge(agg_nota, on="id_estudante")
+
     df_final = df_est.merge(agg, on="id_estudante", how="left")
+
     df_final["risco_evasao"] = df_final["perfil_risco"]
 
+    def _aplicar_risco_nota(row):
+        if row["media_geral"] < NOTA_LIMIAR_RISCO:
+            return _upgrade_risco(row["risco_evasao"])
+        return row["risco_evasao"]
+
+    df_final["risco_evasao"] = df_final.apply(_aplicar_risco_nota, axis=1)
+
     df_final["freq_media"]        = df_final["freq_media"].fillna(0).round(2)
+    df_final["media_geral"]       = df_final["media_geral"].fillna(0).round(1)
     df_final["total_reprovacoes"] = df_final["total_reprovacoes"].fillna(0).astype(int)
     df_final["total_disciplinas"] = df_final["total_disciplinas"].fillna(0).astype(int)
 
     cols = [
         "id_estudante", "matricula", "nome", "id_curso",
         "ano_ingresso", "bairro", "cidade",
-        "freq_media", "total_reprovacoes", "total_disciplinas",
+        "freq_media", "media_geral", "total_reprovacoes", "total_disciplinas",
         "risco_evasao",
     ]
 
